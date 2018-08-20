@@ -1,0 +1,121 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "This stack creates RDS and MongoDB instances needed for UI Testing"
+
+Parameters:
+  AMIIDforMongoDB:
+    Description: "AMI ID for MongoDB"
+    Type: "String"
+    Default: "<Enter AMI ID here>"
+  RDSSnapshotIdentifier:
+    Description: "Snapshot ID for RDS"
+    Type: "String"
+    Default: "<Enter snapshot ID here>"
+  EcsInstanceType:
+    Type: "String"
+    Description: "MongoDB InstanceType"
+    Default: "r4.4xlarge"
+    ConstraintDescription: "must be a valid EC2 instance type."
+  KeyName:
+    Type: "String"
+    Description: "Name of an existing EC2 KeyPair to enable SSH access to the MongoDB instances"
+    Default: "<Enter key here>"
+  SnapshotId:
+    Type: "String"
+    Description: "Name of an existing EBS snapshot for MongoDB instances to add as block volume"
+    Default: "<Enter snapshot ID here>"
+  VpcId:
+    Type: "String"
+    Description: "Please enter VPC Id of existing VPC"
+    Default: "<Enter VPC ID here>"
+  MongoDBSecurityGroup:
+    Type: "CommaDelimitedList"
+    Description: "Optional - Existing security group to associate the MongoDB instances."
+    Default: <Enter subnet ID's here>
+  RDSInstanceSecurityGroupIds:
+    Type: "CommaDelimitedList"
+    Description: "Optional - Existing security group to associate the MongoDB instances."
+    Default: "<Enter Security group ID here>"
+
+Resources:
+#This code block creates EC2 volume for MongoDB datavolume
+  CreateVolume:
+    Type: AWS::EC2::Volume
+    Properties:
+      AvailabilityZone: us-east-1a
+      SnapshotId:
+        Ref: SnapshotId
+      Tags:
+        - Key: Name
+          Value: MongoDB Block Volume
+      VolumeType: gp2
+
+#This code block creates MongoDB instances from AMI specified.
+  MongDBInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      AvailabilityZone: us-east-1a
+      ImageId:
+        Ref: AMIIDforMongoDB
+      InstanceType:
+        Ref: EcsInstanceType
+      KeyName:
+        Ref: KeyName
+      SecurityGroupIds:
+        Ref: MongoDBSecurityGroup
+      SubnetId: subnet-xxxxxxxx
+      Tags:
+        - Key: Name
+          Value: MongoDB Instance
+        -
+          Key: Owner
+          Value: UI_Testing
+      UserData:
+        Fn::Base64: !Sub |
+           #!/bin/bash -xe
+           yum update -y
+           mkdir -p /var/lib/mongo
+           mount /dev/xvdg /var/lib/mongo
+           //usr/bin/mongod -f /etc/mongod.conf --noIndexBuildRetry
+    DependsOn: CreateVolume
+
+#This code block adds A record for MongoDB instances in Account B to Route 53 in Account A.
+  ARecord:
+    Type: 'Custom::A'
+    Properties:
+      ServiceToken: '<service token arn here>'
+      Source: <A record here>
+      Target: !GetAtt
+        - MongDBInstance
+        - PrivateIp
+    DependsOn: MongDBInstance
+
+#This code block adds CNAME record for RDS instances in  Account B to Route 53 in Account A.
+  CNAME:
+    Type: 'Custom::CNAME'
+    Properties:
+      ServiceToken: '<service token arn here>'
+      Source: <CNAME here>
+      Target: !GetAtt
+        - RDSInstance
+        - Endpoint.Address
+    DependsOn: RDSInstance
+
+#This code block attaches volume created in previous step to MongoDB instance.
+  MountPoint:
+    Type: AWS::EC2::VolumeAttachment
+    Properties:
+      InstanceId: !Ref MongDBInstance
+      VolumeId: !Ref CreateVolume
+      Device: /dev/xvdg
+
+#This code block creates RDS instance from snapshot specified in the template.
+  RDSInstance:
+    Type: "AWS::RDS::DBInstance"
+    Properties:
+      DBInstanceClass: db.m4.2xlarge
+      DBInstanceIdentifier: <DB instance name>
+      StorageType: gp2
+      VPCSecurityGroups: !Ref RDSInstanceSecurityGroupIds
+      DBSubnetGroupName: <Subnet group name>
+      DBSnapshotIdentifier: <Snapshot ID>
+
